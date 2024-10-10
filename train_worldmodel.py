@@ -38,9 +38,10 @@ from transformers import (
 )
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
+from transformers import AutoTokenizer
 
 from ivideogpt.vq_model import CompressiveVQModel
-from ivideogpt.transformer import HeadModelWithAction
+from ivideogpt.transformer import HeadModelWithAction, MultiModalHeadModel
 from ivideogpt.utils.video_metric import Evaluator, FeatureStats
 from ivideogpt.data import *
 from peft import LoraConfig, TaskType, get_peft_model
@@ -287,6 +288,7 @@ def parse_args():
     parser.add_argument('--special_token', default=True, action='store_true')
     parser.add_argument('--action_conditioned', default=False, action='store_true')
     parser.add_argument('--action_dim', default=4, type=int, help='action dimension for the task')
+    parser.add_argument('--language_conditioned', default=False, action='store_true')
     parser.add_argument('--embed_no_wd', default=False, action='store_true')
 
     # evaluation
@@ -331,6 +333,9 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
             pixel_values, actions = batch
             actions = actions.to(accelerator.device, non_blocking=True)
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
+        elif args.language_conditioned:
+            pixel_values, text_tokens = batch
+            pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         else:
             pixel_values = batch.to(accelerator.device, non_blocking=True)
         batch_size = pixel_values.shape[0]
@@ -354,6 +359,10 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
                                                                       args.context_length,
                                                                       #   special_token=args.special_token
                                                                       )
+        if args.language_conditioned:
+            tokens = torch.cat([text_tokens, tokens], dim=1)
+            labels = torch.cat([torch.ones(text_tokens.shape).to(tokens.device) * -100, labels])
+
         model_input = {'input_ids': tokens, 'labels': labels}
         if args.action_conditioned:
             model_input['action'] = actions
@@ -374,12 +383,16 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
 
         # predict next frames
         if (i % args.log_gif_interval == 0 and accelerator.is_main_process) or args.use_frame_metrics or args.use_fvd:
+            text_length = 0
+            if args.language_conditioned:
+                text_length = text_tokens.shape[1]
+
             if args.special_token:
-                gen_input = tokens[:, :args.context_length * (256 + 1)]  # TODO: magic number
+                gen_input = tokens[:, :text_length + args.context_length * (256 + 1)]  # TODO: magic number
                 # gen_input = tokens[:, :2 * (256 + 1)]  # TODO: magic number
                 max_new_tokens = (1 + 16) * (args.segment_length - args.context_length) - 1
             else:
-                gen_input = tokens[:, :args.context_length * 256]
+                gen_input = tokens[:, :text_length + args.context_length * 256]
                 max_new_tokens = 16 * (args.segment_length - args.context_length)
             # generated_tokens = accelerator.unwrap_model(model).generate(
             #     gen_input,
@@ -605,6 +618,10 @@ def start_train():
                                     segment_length=args.segment_length, model_type=args.model_type,
                                     reward_prediction=args.reward_prediction, action_recon=args.action_recon)
 
+    if args.language_conditioned:
+        model = MultiModalHeadModel(model, context=args.context_length, 
+                                    segment_length=args.segment_length, model_type=args.model_type)
+
     if args.pretrained_transformer_path is not None:
         state_dict = load_file(os.path.join(args.pretrained_transformer_path, 'model.safetensors'))
         if args.load_internal_llm:
@@ -624,7 +641,7 @@ def start_train():
                                  target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj",
                                                  "up_proj", "down_proj", "embed_tokens", "lm_head"],  # ! only for llama
                                  )
-        if args.action_conditioned:
+        if args.action_conditioned or args.language_conditioned:
             model.llm = get_peft_model(model.llm, peft_config)
         else:
             model = get_peft_model(model, peft_config)
@@ -765,6 +782,9 @@ def start_train():
                 pixel_values, actions = batch
                 actions = actions.to(accelerator.device, non_blocking=True)
                 pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
+            elif args.language_conditioned:
+                pixel_values, text_tokens = batch
+                pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             else:
                 pixel_values = batch.to(accelerator.device, non_blocking=True)
 
@@ -775,13 +795,16 @@ def start_train():
                                                                               #   special_token=args.special_token
                                                                               )
                 # recon = accelerator.unwrap_model(tokenizer).detokenize(tokens, args.context_length, special_token=args.special_token) # for debug
+                if args.language_conditioned:
+                    tokens = torch.cat([text_tokens, tokens], dim=1)
+                    labels = torch.cat([torch.ones(text_tokens.shape).to(tokens.device) * -100, labels])
+                
                 model_input = {
                     'input_ids': tokens,
                     'labels': labels,
                 }
                 if args.action_conditioned:
                     model_input['action'] = actions
-                    print(actions[0])
 
             with accelerator.accumulate(model):
                 if args.reward_prediction:

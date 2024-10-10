@@ -76,6 +76,6 @@ for split in ["train", "test"]:
             np.savez_compressed(save_file_path, **{'image': main_images, 'action': actions, 'aux1_image': aux1_images})
 
             if args.save_gif:
-                images = [Image.fromarray(np.uint8(image)) for image in aux1_images]
+                images = [Image.fromarray(np.uint8(image)) for image in main_images]
                 gif_save_path = os.path.join(args.save_path, "gif", f"traj_{str(file_index).zfill(5)}.gif")
                 images[0].save(gif_save_path, save_all=True, append_images=images[1:], duration=50, loop=0)

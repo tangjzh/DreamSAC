@@ -1,2 +1,2 @@
-bair_train_dataset: /dev/null/train
-bair_test_dataset: /dev/null/test
+bair_train_dataset: data/bair_preprocessed/train
+bair_test_dataset: data/bair_preprocessed/test

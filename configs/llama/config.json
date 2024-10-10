@@ -1,23 +1,27 @@
 {
   "architectures": [
-    "LlamaModel"
+    "LlamaForCausalLM"
   ],
+  "attention_bias": false,
+  "attention_dropout": 0.1,
   "bos_token_id": 50256,
   "eos_token_id": 50256,
   "hidden_act": "silu",
   "hidden_size": 768,
   "initializer_range": 0.02,
   "intermediate_size": 3072,
-  "max_length": 1024,
   "max_position_embeddings": 1024,
   "model_type": "llama",
   "num_attention_heads": 12,
   "num_hidden_layers": 12,
   "num_key_value_heads": 12,
+  "pretraining_tp": 1,
   "rms_norm_eps": 1e-06,
+  "rope_scaling": null,
+  "rope_theta": 10000.0,
   "tie_word_embeddings": false,
-  "torch_dtype": "float16",
-  "transformers_version": "4.32.0.dev0",
+  "torch_dtype": "float32",
+  "transformers_version": "4.38.2",
   "use_cache": true,
-  "vocab_size": 8192
+  "vocab_size": 16386
 }

@@ -2,3 +2,6 @@
 __pycache__
 pretrained_models
 outputs
+/data
+log_vqgan
+log_trm
