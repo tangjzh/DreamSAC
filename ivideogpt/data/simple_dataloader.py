@@ -64,6 +64,10 @@ def get_base_stepsize(dataset_name):
         'bair_robot_pushing': 1,
         'vp2_robodesk': 1,
         'vp2_robosuite': 1,
+
+        'vlnce': 1,
+        'kinetics': 3,
+        'ego4d': 3,
     }
     if dataset_name in stepsize:
         return stepsize[dataset_name]
@@ -92,6 +96,10 @@ def get_display_key(dataset_name):
         'bair_robot_pushing': 'aux1_image',
         'vp2_robodesk': 'image',
         'vp2_robosuite': 'image',
+
+        'vlnce': 'images',
+        'kinetics': 'images',
+        'ego4d': 'images',
     }
     if dataset_name in key:
         return key[dataset_name]
@@ -121,6 +129,8 @@ class SimpleRoboticDatasetv2(data.Dataset):
         image_size=256,
         # action
         load_action=False,
+        load_language=False,
+        text_tokenizer=None,
     ):
         self.image_size = image_size
         self.dataset_name = dataset_name
@@ -141,12 +151,22 @@ class SimpleRoboticDatasetv2(data.Dataset):
         self.no_aug = no_aug
 
         self.load_action = load_action
+        self.load_language = load_language
+        self.tokenizer = text_tokenizer
 
         if dataset_name == 'bair_robot_pushing':
             if train:
                 parent_dir = yaml.load(open('DATASET.yaml'), Loader=yaml.FullLoader)['bair_train_dataset']
             else:
                 parent_dir = yaml.load(open('DATASET.yaml'), Loader=yaml.FullLoader)['bair_test_dataset']
+            self.filenames = glob.glob(os.path.join(parent_dir, '*.npz'))
+            self.filenames.sort()
+        elif dataset_name in ['vlnce', 'kinetics', 'ego4d']:
+            self.load_action = False
+            if train:
+                parent_dir = yaml.load(open('DATASET.yaml'), Loader=yaml.FullLoader)[f'{dataset_name}_train_dataset']
+            else:
+                parent_dir = yaml.load(open('DATASET.yaml'), Loader=yaml.FullLoader)[f'{dataset_name}_test_dataset']
             self.filenames = glob.glob(os.path.join(parent_dir, '*.npz'))
             self.filenames.sort()
         elif dataset_name == 'vp2_robodesk':
@@ -364,6 +384,7 @@ class SimpleRoboticDatasetv2(data.Dataset):
         id = np.random.randint(self.size)
         episode = np.load(self.filenames[id])[self.display_key]
         action = np.load(self.filenames[id])['action'] if self.load_action else None
+        instruction = np.load(self.filenames[id])['instruction'] if self.load_language else None
         if self.dataset_name == 'tfds_robonet' and action is not None:
             new_row = np.array([0, 0, 0, 0, 0]).reshape(1, -1)
             action = np.append(action, new_row, axis=0)
@@ -374,9 +395,26 @@ class SimpleRoboticDatasetv2(data.Dataset):
         else:
             images = self.data_augmentation(images)
 
-        if self.load_action:
+        if self.load_action and self.load_language:
+            actions = torch.Tensor(np.array(actions))
+            instruction = str(instruction)
+            instruction = self.tokenizer(instruction, 
+                                         return_tensors="pt", 
+                                         padding="max_length", 
+                                         max_length=256, 
+                                         truncation=True)
+            return images, actions, instruction
+        elif self.load_action:
             actions = torch.Tensor(np.array(actions))
             return images, actions
+        elif self.load_language:
+            instruction = str(instruction)
+            instruction = self.tokenizer(instruction, 
+                                         return_tensors="pt", 
+                                         padding="max_length", 
+                                         max_length=256, 
+                                         truncation=True)
+            return images, instruction
         else:
             return images
 
@@ -437,15 +475,23 @@ class EvalDataset(data.Dataset):
         segment_length,
         image_size=256,
         load_action=False,
+        load_language=False,
+        text_tokenizer=None,
     ):
         self.image_size = image_size
         self.dataset_name = dataset_name
 
         self.segment_length = segment_length
         self.load_action = load_action
+        self.load_language = load_language
+        self.tokenizer = text_tokenizer
 
         if dataset_name == 'bair_robot_pushing':
             parent_dir = yaml.load(open('DATASET.yaml'), Loader=yaml.FullLoader)['bair_test_dataset']
+            self.filenames = glob.glob(os.path.join(parent_dir, '*.npz'))
+            self.filenames.sort()
+        elif dataset_name in ['vlnce', 'kinetics', 'ego4d']:
+            parent_dir = yaml.load(open('DATASET.yaml'), Loader=yaml.FullLoader)[f'{dataset_name}_test_dataset']
             self.filenames = glob.glob(os.path.join(parent_dir, '*.npz'))
             self.filenames.sort()
         elif dataset_name == 'tfds_robonet':
@@ -496,6 +542,7 @@ class EvalDataset(data.Dataset):
     def __getitem__(self, item):
         episode = np.load(self.filenames[item])[self.display_key]
         action = np.load(self.filenames[item])['action'] if self.load_action else None
+        instruction = np.load(self.filenames[item])['instruction'] if self.load_language else None
         if self.dataset_name == 'tfds_robonet' and action is not None:
             new_row = np.array([0, 0, 0, 0, 0]).reshape(1, -1)
             action = np.append(action, new_row, axis=0)
@@ -503,9 +550,26 @@ class EvalDataset(data.Dataset):
         images = torch.Tensor(np.array(images)).permute(0, 3, 1, 2)  # T, H, W, C -> T, C, H, W
         images = self.data_augmentation(images)
 
-        if self.load_action:
+        if self.load_action and self.load_language:
+            actions = torch.Tensor(np.array(actions))
+            instruction = str(instruction)
+            instruction = self.tokenizer(instruction, 
+                                         return_tensors="pt", 
+                                         padding="max_length",
+                                         max_length=256, 
+                                         truncation=True)
+            return images, actions, instruction
+        elif self.load_action:
             actions = torch.Tensor(np.array(actions))
             return images, actions
+        elif self.load_language:
+            instruction = str(instruction)
+            instruction = self.tokenizer(instruction, 
+                                         return_tensors="pt", 
+                                         padding="max_length", 
+                                         max_length=256, 
+                                         truncation=True)
+            return images, instruction
         else:
             return images
 
@@ -514,6 +578,6 @@ class EvalDataset(data.Dataset):
 
 
 class EvalDataLoader(data.DataLoader):
-    def __init__(self, dataset_name, segment_length, image_size, batch_size=2, num_workers=1, load_action=False, **dummy_args):
-        self.dataset = EvalDataset(dataset_name, segment_length, image_size, load_action)
+    def __init__(self, dataset_name, segment_length, image_size, batch_size=2, num_workers=1, load_action=False, **dataset_args):
+        self.dataset = EvalDataset(dataset_name, segment_length, image_size, load_action, **dataset_args)
         super().__init__(self.dataset, batch_size=batch_size, num_workers=num_workers)

@@ -85,6 +85,9 @@ def get_dataloaders(args):
         'stepsize': args.video_stepsize,
         'segment_horizon': None,
     }
+    text_tokenizer = AutoTokenizer.from_pretrained(args.text_tokenizer) if args.language_conditioned else None
+    text_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+    vocab_size = text_tokenizer.vocab_size if text_tokenizer else 0
     train_dataloader = SimpleRoboticDataLoaderv2(
         parent_dir=args.dataset_path,
         datasets=DATASET_NAMED_MIXES[args.oxe_data_mixes_type],
@@ -97,6 +100,8 @@ def get_dataloaders(args):
         **augmentation_args,
         **segment_args,
         load_action=args.action_conditioned,
+        load_language=args.language_conditioned,
+        text_tokenizer=text_tokenizer,
     )
     if args.use_eval_dataset:
         assert len(DATASET_NAMED_MIXES[args.oxe_data_mixes_type]) == 1
@@ -107,6 +112,8 @@ def get_dataloaders(args):
             image_size=args.resolution,
             segment_length=args.segment_length,
             load_action=args.action_conditioned,
+            load_language=args.language_conditioned,
+            text_tokenizer=text_tokenizer,
         )
     else:
         eval_dataloader = SimpleRoboticDataLoaderv2(
@@ -120,8 +127,10 @@ def get_dataloaders(args):
             **augmentation_args,
             **segment_args,
             load_action=args.action_conditioned,
+            load_language=args.language_conditioned,
+            text_tokenizer=text_tokenizer,
         )
-    return train_dataloader, eval_dataloader
+    return train_dataloader, eval_dataloader, vocab_size
 
 
 def get_tokenizer(args):
@@ -221,6 +230,7 @@ def parse_args():
                         choices=['vqgan', 'ctx_vqgan'], help="VQGAN model type to use.")
     parser.add_argument('--pretrained_model_name_or_path', type=str, required=True)
     parser.add_argument('--pretrained_transformer_path', type=str, default=None)
+    parser.add_argument('--text_tokenizer', type=str, default='gpt2')
     parser.add_argument('--load_internal_llm', default=False, action='store_true')
     parser.add_argument("--trust_remote_code", type=bool, default=False,
                         help=(
@@ -318,7 +328,7 @@ def parse_args():
 
 
 @torch.no_grad
-def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, completed_steps):
+def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, completed_steps, text_vocab_size):
     model.eval()
     losses = []
     mse_values, psnr_values, ssim_values, lpips_values, = [], [], [], []
@@ -329,12 +339,16 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
     for i, batch in enumerate(eval_dataloader):
         if i == args.max_eval_iters:
             break
-        if args.action_conditioned:
+        if args.action_conditioned and args.language_conditioned:
+            pixel_values, instructions, actions = batch
+            actions = actions.to(accelerator.device, non_blocking=True)
+            pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
+        elif args.action_conditioned:
             pixel_values, actions = batch
             actions = actions.to(accelerator.device, non_blocking=True)
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         elif args.language_conditioned:
-            pixel_values, text_tokens = batch
+            pixel_values, instructions = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         else:
             pixel_values = batch.to(accelerator.device, non_blocking=True)
@@ -359,13 +373,24 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
                                                                       args.context_length,
                                                                       #   special_token=args.special_token
                                                                       )
+        text_length, attention_mask = 0, None
         if args.language_conditioned:
-            tokens = torch.cat([text_tokens, tokens], dim=1)
-            labels = torch.cat([torch.ones(text_tokens.shape).to(tokens.device) * -100, labels])
+            tokens += text_vocab_size
+            labels = torch.where(labels > 0, labels + text_vocab_size, labels)
+            text_tokens = instructions['input_ids'].squeeze().to(tokens.device)
+            attention_mask = torch.cat([instructions['attention_mask'].squeeze().to(tokens.device), torch.ones(tokens.shape[0], tokens.shape[1] + 1).to(tokens.device)], dim=1)
+            
+            text_length = text_tokens.shape[1]
+            sep_token = model.module.sep_token if accelerator.num_processes > 1 else model.sep_token
+            tokens = torch.cat([text_tokens, (torch.ones(tokens.shape[0]) * (sep_token - 1)).unsqueeze(1).to(tokens.device), tokens], dim=1).long()
+            labels = torch.cat([torch.ones(text_tokens.shape).to(tokens.device) * -100, (torch.ones(tokens.shape[0]) * (sep_token - 1)).unsqueeze(1).to(tokens.device), labels], dim=1).long()
 
         model_input = {'input_ids': tokens, 'labels': labels}
         if args.action_conditioned:
             model_input['action'] = actions
+        if args.language_conditioned:
+            model_input['attention_mask'] = attention_mask
+            model_input['text_length'] = text_length
 
         if args.reward_prediction:
             if accelerator.num_processes > 1:
@@ -383,16 +408,15 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
 
         # predict next frames
         if (i % args.log_gif_interval == 0 and accelerator.is_main_process) or args.use_frame_metrics or args.use_fvd:
-            text_length = 0
-            if args.language_conditioned:
-                text_length = text_tokens.shape[1]
 
             if args.special_token:
                 gen_input = tokens[:, :text_length + args.context_length * (256 + 1)]  # TODO: magic number
+                attention_mask = attention_mask[:, :text_length + args.context_length * (256 + 1)]
                 # gen_input = tokens[:, :2 * (256 + 1)]  # TODO: magic number
                 max_new_tokens = (1 + 16) * (args.segment_length - args.context_length) - 1
             else:
                 gen_input = tokens[:, :text_length + args.context_length * 256]
+                attention_mask = attention_mask[:, :text_length + args.context_length * 256]
                 max_new_tokens = 16 * (args.segment_length - args.context_length)
             # generated_tokens = accelerator.unwrap_model(model).generate(
             #     gen_input,
@@ -411,6 +435,8 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
                         'temperature': 1.0,
                         'top_k': 100,
                         'max_new_tokens': max_new_tokens,
+                        'text_length': text_length,
+                        'attention_mask': attention_mask,
                     },
                     max_batch_size=args.max_generate_batchsize,
                     verbose=False,
@@ -426,12 +452,17 @@ def evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, co
                         'temperature': 1.0,
                         'top_k': 100,
                         'max_new_tokens': max_new_tokens,
+                        'text_length': text_length,
+                        'attention_mask': attention_mask,
                     },
                     max_batch_size=args.max_generate_batchsize,
                     verbose=False,
                     # verbose=True,
                     reward_prediction=False,
                 )
+            if args.language_conditioned:
+                generated_tokens -= text_vocab_size
+            # print("MANNNN!", torch.min(generated_tokens), torch.max(generated_tokens))
             if args.max_decode_batchsize is not None and generated_tokens.shape[0] > args.max_decode_batchsize:
                 recon_output = batch_forward(
                     args.max_decode_batchsize,
@@ -588,7 +619,10 @@ def start_train():
     #
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-    train_dataloader, eval_dataloader = get_dataloaders(args)
+
+    # TODO: Add text tokenizer, rewrite multi-modal tokenization
+    # Problem: Now only tokenize images, should reform it to a shared space, i.e., vision vocab size + lang vocab size, and edit token ids.
+    train_dataloader, eval_dataloader, text_vocab_size = get_dataloaders(args)
     tokenizer, vocab_size = get_tokenizer(args)
 
     if args.config_name:
@@ -600,6 +634,7 @@ def start_train():
             config.attention_dropout = args.llama_attn_drop
     else:
         assert False
+    vocab_size += text_vocab_size
     config.vocab_size = vocab_size
     if args.reward_prediction:
         config.output_hidden_states = True
@@ -619,15 +654,27 @@ def start_train():
                                     reward_prediction=args.reward_prediction, action_recon=args.action_recon)
 
     if args.language_conditioned:
-        model = MultiModalHeadModel(model, context=args.context_length, 
-                                    segment_length=args.segment_length, model_type=args.model_type)
+        model = MultiModalHeadModel(model, context=args.context_length, segment_length=args.segment_length, 
+                                    text_vocab_size=text_vocab_size, model_type=args.model_type)
 
     if args.pretrained_transformer_path is not None:
         state_dict = load_file(os.path.join(args.pretrained_transformer_path, 'model.safetensors'))
         if args.load_internal_llm:
-            model.llm.load_state_dict(state_dict, strict=True)
+            model_dict = model.llm.state_dict()
+            filtered_state_dict = {
+                k: v for k, v in state_dict.items()
+                if k in model_dict and v.size() == model_dict[k].size()
+            }
+            model_dict.update(filtered_state_dict)
+            model.llm.load_state_dict(model_dict)
         else:
-            model.load_state_dict(state_dict, strict=True)
+            model_dict = model.state_dict()
+            filtered_state_dict = {
+                k: v for k, v in state_dict.items()
+                if k in model_dict and v.size() == model_dict[k].size()
+            }
+            model_dict.update(filtered_state_dict)
+            model.load_state_dict(model_dict)
         logger.info("Finetuning the model from " + args.pretrained_transformer_path)
     else:
         logger.info("Training new model from scratch")
@@ -761,7 +808,7 @@ def start_train():
     avg_loss = None
 
     if args.eval_only:
-        eval_logs = evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, completed_steps)
+        eval_logs = evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, completed_steps, text_vocab_size)
         if eval_logs is not None:
             print(args.pretrained_model_name_or_path)
             print(args.pretrained_transformer_path)
@@ -778,12 +825,16 @@ def start_train():
             active_dataloader = train_dataloader
 
         for step, batch in enumerate(active_dataloader):
-            if args.action_conditioned:
+            if args.action_conditioned and args.language_conditioned:
+                pixel_values, instructions, actions = batch
+                actions = actions.to(accelerator.device, non_blocking=True)
+                pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
+            elif args.action_conditioned:
                 pixel_values, actions = batch
                 actions = actions.to(accelerator.device, non_blocking=True)
                 pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             elif args.language_conditioned:
-                pixel_values, text_tokens = batch
+                pixel_values, instructions = batch
                 pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             else:
                 pixel_values = batch.to(accelerator.device, non_blocking=True)
@@ -795,16 +846,27 @@ def start_train():
                                                                               #   special_token=args.special_token
                                                                               )
                 # recon = accelerator.unwrap_model(tokenizer).detokenize(tokens, args.context_length, special_token=args.special_token) # for debug
+                text_length, attention_mask = 0, None
                 if args.language_conditioned:
-                    tokens = torch.cat([text_tokens, tokens], dim=1)
-                    labels = torch.cat([torch.ones(text_tokens.shape).to(tokens.device) * -100, labels])
-                
+                    tokens += text_vocab_size
+                    labels = torch.where(labels > 0, labels + text_vocab_size, labels)
+                    text_tokens = instructions['input_ids'].squeeze().to(tokens.device)
+                    attention_mask = torch.cat([instructions['attention_mask'].squeeze(), torch.ones(tokens.shape[0], tokens.shape[1] + 1)], dim=1).to(tokens.device)
+                    
+                    text_length = text_tokens.shape[1]
+                    sep_token = model.module.sep_token if accelerator.num_processes > 1 else model.sep_token
+                    tokens = torch.cat([text_tokens, (torch.ones(tokens.shape[0]) * (sep_token - 1)).unsqueeze(1).to(tokens.device), tokens], dim=1).long()
+                    labels = torch.cat([torch.ones(text_tokens.shape).to(tokens.device) * -100, (torch.ones(tokens.shape[0]) * (sep_token - 1)).unsqueeze(1).to(tokens.device), labels], dim=1).long()
+
                 model_input = {
                     'input_ids': tokens,
                     'labels': labels,
                 }
                 if args.action_conditioned:
                     model_input['action'] = actions
+                if args.language_conditioned:
+                    model_input['attention_mask'] = attention_mask
+                    model_input['text_length'] = text_length
 
             with accelerator.accumulate(model):
                 if args.reward_prediction:
@@ -861,7 +923,7 @@ def start_train():
             if accelerator.sync_gradients:
                 # Validation
                 if completed_steps == args.max_train_steps or (completed_steps % args.validation_steps == 1 and (completed_steps > 1 or not args.skip_first_val)):
-                    evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, completed_steps)
+                    evaluate(args, accelerator, tokenizer, model, eval_dataloader, evaluator, completed_steps, text_vocab_size)
 
                 # if avg_loss > 4.0:
                 #     accelerator.load_state(lastest_output_dir)

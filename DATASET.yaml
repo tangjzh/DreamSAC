@@ -1,2 +1,11 @@
-bair_train_dataset: data/bair_preprocessed/train
-bair_test_dataset: data/bair_preprocessed/test
+# bair_train_dataset: data/bair_preprocessed/train
+# bair_test_dataset: data/bair_preprocessed/test
+
+vlnce_train_dataset: /mnt/HDD1_3TB/jinzhou/vlnce_processed/train
+vlnce_test_dataset: /mnt/HDD1_3TB/jinzhou/vlnce_processed/test
+
+kinetics_train_dataset: /mnt/SSD1_4TB/jinzhou/kinetics_preprocess/train
+kinetics_test_dataset: /mnt/SSD1_4TB/jinzhou/kinetics_preprocess/test
+
+ego4d_train_dataset: /mnt/HDD_16TB/jinzhou/Ego4D/v2/ego4d_processed/train
+ego4d_test_dataset: /mnt/HDD_16TB/jinzhou/Ego4D/v2/ego4d_processed/test
