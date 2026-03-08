@@ -1,0 +1,352 @@
+defaults:
+
+  logdir: ~/logdir/{timestamp}
+  replica: 0
+  replicas: 1
+  method: name
+  task: dummy_disc
+  seed: 0
+  script: train
+  batch_size: 16
+  batch_length: 64
+  report_length: 32
+  consec_train: 1
+  consec_report: 1
+  replay_context: 1
+  random_agent: False
+  random_policy: False
+  clock_addr: ''
+  clock_port: ''
+  ipv6: False
+  errfile: False
+
+  logger:
+    outputs: [jsonl, scope]
+    filter: 'score|length|fps|ratio|train/loss/|train/rand/'
+    timer: True
+    fps: 15
+    user: ''
+
+  env:
+    atari: {size: [96, 96], repeat: 4, sticky: True, gray: True, actions: all, lives: unused, noops: 30, autostart: False, pooling: 2, aggregate: max, resize: pillow, clip_reward: False}
+    procgen: {size: [96, 96], resize: pillow}
+    crafter: {size: [64, 64], logs: False}
+    atari100k: {size: [64, 64], repeat: 4, sticky: False, gray: False, actions: needed, lives: unused, noops: 30, autostart: False, resize: pillow, clip_reward: False}
+    dmlab: {size: [64, 64], repeat: 4, episodic: True, use_seed: True}
+    minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
+    dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1, use_randomized: False, param_file: '', use_train_set: True}
+    loconav: {size: [64, 64], repeat: 1, camera: -1}
+
+  replay:
+    size: 5e6
+    online: True
+    fracs: {uniform: 1.0, priority: 0.0, recency: 0.0}
+    prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
+    priosignal: model
+    recexp: 1.0
+    chunksize: 1024
+
+  run:
+    steps: 1e10
+    duration: 0
+    train_ratio: 32.0
+    log_every: 120
+    report_every: 300
+    save_every: 900
+    envs: 16
+    eval_envs: 4
+    eval_eps: 1
+    report_batches: 1
+    from_checkpoint: ''
+    from_checkpoint_regex: '.*'
+    episode_timeout: 180
+    actor_addr: 'localhost:{auto}'
+    replay_addr: 'localhost:{auto}'
+    logger_addr: 'localhost:{auto}'
+    actor_batch: -1
+    actor_threads: 1
+    agent_process: False
+    remote_replay: False
+    remote_envs: False
+    usage: {psutil: True, nvsmi: True, gputil: False, malloc: False, gc: False}
+    debug: True
+
+  jax:
+    platform: cuda
+    compute_dtype: bfloat16
+    policy_devices: [0]
+    train_devices: [0]
+    mock_devices: 0
+    prealloc: True
+    jit: True
+    debug: False
+    expect_devices: 0
+    enable_policy: True
+    coordinator_address: ''
+
+  agent:
+    random_policy: False  # Use random actions for exploration (set to True for pretrain)
+    loss_scales: {rec: 1.0, rew: 1.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3, vr: 0.5, rnd: 0.1, icm: 0.1, p2e: 0.1}
+    opt: {lr: 4e-5, agc: 0.3, eps: 1e-20, beta1: 0.9, beta2: 0.999, momentum: True, wd: 0.0, schedule: const, warmup: 1000, anneal: 0}
+    ac_grads: False
+    # Intrinsic reward configuration
+    use_intrinsic_reward: False
+    intrinsic_reward_scale: 1.0
+    intrinsic_reward_type: hybrid  # 'rnd', 'symmetry', 'hybrid', 'icm', or 'plan2explore'
+    # RND configuration
+    use_rnd: False
+    rnd: {layers: 3, units: 512, output_dim: 128, act: silu, norm: rms}
+    # ICM configuration
+    use_icm: False
+    icm: {layers: 3, units: 512, feature_dim: 256, forward_scale: 1.0, inverse_scale: 0.1, act: silu, norm: rms}
+    # Plan2Explore configuration
+    use_plan2explore: False
+    plan2explore: {num_ensemble: 5, layers: 3, units: 512, feature_dim: 256, disagreement_scale: 1.0, act: silu, norm: rms}
+    # Symmetry reward configuration
+    lambda_smoothness: 0.01  # Weight for action smoothness penalty
+    # Hybrid reward annealing
+    anneal_start: 0
+    anneal_steps: 100000
+    w_final: 1.0  # Final weight for symmetry reward
+    # EMA Target Hamiltonian
+    use_ema_hamiltonian: False
+    ema_decay: 0.99
+    # Viewpoint robustness
+    use_viewpoint_robustness: False
+    viewpoint_temperature: 0.1
+    # Adaptation configuration (for downstream task fine-tuning)
+    adaptation:
+      mode: none  # 'none', 'zero_shot', or 'parametric'
+      dynamics_lr_scale: 0.1
+      reset_policy: False
+    dyn:
+      typ: rssm
+      rssm: {deter: 8192, hidden: 1024, stoch: 32, classes: 64, act: silu, norm: rms, unimix: 0.01, outscale: 1.0, winit: trunc_normal_in, imglayers: 2, obslayers: 1, dynlayers: 1, absolute: False, blocks: 8, free_nats: 1.0}
+      hamiltonian: {deter: 8192, hidden: 1024, stoch: 32, classes: 64, act: silu, norm: rms, unimix: 0.01, outscale: 1.0, winit: trunc_normal_in, imglayers: 2, obslayers: 1, dynlayers: 1, absolute: False, blocks: 8, free_nats: 1.0, ham_layers: 3, ham_units: 512, ham_act: silu, use_symplectic: False, integrator_method: leapfrog, integrator_dt: 0.1, use_equivariant: False, use_e3nn: False, equivariant_max_ell: 2, use_input_matrix: False, input_matrix_layers: 2, input_matrix_units: 256}
+    enc:
+      typ: simple
+      simple: {depth: 64, mults: [2, 3, 4, 4], layers: 3, units: 1024, act: silu, norm: rms, winit: trunc_normal_in, symlog: True, outer: False, kernel: 5, strided: False}
+      savi: {depth: 32, mults: [2, 3, 4, 4], kernel: 5, num_slots: 7, slot_dim: 128, feature_dim: 128, num_iterations: 3, num_initial_iterations: 5, act: silu, norm: rms, winit: trunc_normal_in}
+    dec:
+      typ: simple
+      simple: {depth: 64, mults: [2, 3, 4, 4], layers: 3, units: 1024, act: silu, norm: rms, outscale: 1.0, winit: trunc_normal_in, outer: False, kernel: 5, bspace: 8, strided: False}
+      savi: {depth: 32, mults: [2, 3, 4, 4], kernel: 5, num_slots: 7, slot_dim: 128, act: silu, norm: rms, outscale: 1.0, winit: trunc_normal_in}
+    rewhead: {layers: 1, units: 1024, act: silu, norm: rms, output: symexp_twohot, outscale: 0.0, winit: trunc_normal_in, bins: 255}
+    conhead: {layers: 1, units: 1024, act: silu, norm: rms, output: binary, outscale: 1.0, winit: trunc_normal_in}
+    policy: {layers: 3, units: 1024, act: silu, norm: rms, minstd: 0.1, maxstd: 1.0, outscale: 0.01, unimix: 0.01, winit: trunc_normal_in}
+    value: {layers: 3, units: 1024, act: silu, norm: rms, output: symexp_twohot, outscale: 0.0, winit: trunc_normal_in, bins: 255}
+    policy_dist_disc: categorical
+    policy_dist_cont: bounded_normal
+    imag_last: 0
+    imag_length: 15
+    horizon: 333
+    contdisc: True
+    imag_loss: {slowtar: False, lam: 0.95, actent: 3e-4, slowreg: 1.0}
+    repl_loss: {slowtar: False, lam: 0.95, slowreg: 1.0}
+    slowvalue: {rate: 0.02, every: 1}
+    retnorm: {impl: perc, rate: 0.01, limit: 1.0, perclo: 5.0, perchi: 95.0, debias: False}
+    valnorm: {impl: none, rate: 0.01, limit: 1e-8}
+    advnorm: {impl: none, rate: 0.01, limit: 1e-8}
+    reward_grad: True
+    repval_loss: True
+    repval_grad: True
+    report: True
+    report_gradnorms: False
+
+size1m: &size1m
+  .*\.rssm: {deter: 512, hidden: 64, classes: 4}
+  .*\.depth: 4
+  .*\.units: 64
+
+size12m: &size12m
+  .*\.rssm: {deter: 2048, hidden: 256, classes: 16}
+  .*\.depth: 16
+  .*\.units: 256
+
+size25m: &size25m
+  .*\.rssm: {deter: 3072, hidden: 384, classes: 24}
+  .*\.depth: 24
+  .*\.units: 384
+
+size50m: &size50m
+  .*\.rssm: {deter: 4096, hidden: 512, classes: 32}
+  .*\.depth: 32
+  .*\.units: 512
+
+size100m: &size100m
+  .*\.rssm: {deter: 6144, hidden: 768, classes: 48}
+  .*\.depth: 48
+  .*\.units: 768
+
+size200m: &size200m
+  .*\.rssm: {deter: 8192, hidden: 1024, classes: 64}
+  .*\.depth: 64
+  .*\.units: 1024
+
+size400m: &size400m
+  .*\.rssm: {deter: 12288, hidden: 1536, classes: 96}
+  .*\.depth: 96
+  .*\.units: 1536
+
+minecraft:
+  task: minecraft_diamond
+
+dmlab:
+  task: dmlab_explore_goal_locations_small
+  run: {steps: 2.6e7, train_ratio: 32}
+
+atari:
+  task: atari_pong
+  run: {steps: 5.1e7, train_ratio: 32}
+
+procgen:
+  task: procgen_coinrun
+  run: {steps: 1.1e8, train_ratio: 64}
+
+atari100k:
+  task: atari100k_pong
+  run: {steps: 1.1e5, envs: 1, train_ratio: 256}
+
+crafter:
+  task: crafter_reward
+  run: {steps: 1.1e6, envs: 1, train_ratio: 512}
+
+dmc_proprio:
+  <<: *size1m
+  task: dmc_walker_walk
+  env.dmc.image: False
+  run: {steps: 1.1e6, train_ratio: 1024}
+
+dmc_vision:
+  task: dmc_walker_walk
+  env.dmc.proprio: False
+  run: {steps: 1.1e6, train_ratio: 256}
+
+bsuite:
+  task: bsuite_mnist/0
+  run: {envs: 1, save_every: -1, train_ratio: 1024}
+
+loconav:
+  task: loconav_ant_maze_m
+  env.loconav.repeat: 1
+  run.train_ratio: 256
+
+multicpu:
+  batch_size: 12
+  jax.mock_devices: 8
+  jax.policy_devices: [0, 1]
+  jax.train_devices: [2, 3, 4, 5, 6, 7]
+
+debug:
+  batch_size: 8
+  batch_length: 10
+  report_length: 5
+  jax: {platform: cpu, debug: True, prealloc: False}
+  run: {envs: 4, report_every: 10, log_every: 5, save_every: 15, train_ratio: 8, debug: True}
+  replay.size: 1e4
+  agent:
+    .*\.bins: 5
+    .*\.layers: 1
+    .*\.units: 8
+    .*\.stoch: 2
+    .*\.classes: 4
+    .*\.deter: 8
+    .*\.hidden: 3
+    .*\.blocks: 4
+    .*\.depth: 2
+
+# DreamSAC: Unsupervised pretraining with Hybrid intrinsic reward (RND + Symmetry)
+pretrain:
+  agent:
+    dyn.typ: hamiltonian
+    dyn.hamiltonian.use_symplectic: True
+    dyn.hamiltonian.use_input_matrix: True
+    use_intrinsic_reward: True
+    intrinsic_reward_scale: 1.0
+    intrinsic_reward_type: hybrid
+    use_rnd: True
+    lambda_smoothness: 0.01
+    anneal_start: 10000
+    anneal_steps: 100000
+    w_final: 1.0
+    loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 0.0, value: 0.0, repval: 0.0}
+
+# DreamSAC: Finetune on downstream task with external reward (default: zero-shot)
+finetune:
+  agent:
+    random_policy: False  # Train policy during finetuning
+    dyn.typ: hamiltonian
+    dyn.hamiltonian.use_symplectic: True
+    dyn.hamiltonian.use_input_matrix: True
+    use_intrinsic_reward: False
+    intrinsic_reward_scale: 0.0
+    use_rnd: False
+    use_ema_hamiltonian: False
+    loss_scales: {rec: 1.0, rew: 1.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3}
+    adaptation:
+      mode: zero_shot  # 'zero_shot' or 'parametric'
+    
+# DreamSAC: Zero-shot structural generalization (novel poses/viewpoints)
+finetune_zero_shot:
+  agent:
+    dyn.typ: hamiltonian
+    use_intrinsic_reward: False
+    use_rnd: False
+    loss_scales: {rec: 1.0, rew: 1.0, con: 1.0, dyn: 0.0, rep: 0.0, policy: 1.0, value: 1.0, repval: 0.3}
+    adaptation:
+      mode: zero_shot
+    
+# DreamSAC: Rapid parametric adaptation (novel physics parameters)
+finetune_parametric:
+  agent:
+    dyn.typ: hamiltonian
+    dyn.hamiltonian.use_symplectic: True
+    dyn.hamiltonian.use_input_matrix: True
+    use_intrinsic_reward: False
+    use_rnd: False
+    loss_scales: {rec: 1.0, rew: 1.0, con: 1.0, dyn: 0.1, rep: 0.01, policy: 1.0, value: 1.0, repval: 0.3}
+    adaptation:
+      mode: parametric
+      dynamics_lr_scale: 0.1  # Fine-tune dynamics with 10% of base LR
+      reset_policy: True      # Reset policy and critic
+
+# DreamSAC with Symplectic Integrator + Input Matrix (full physics-based dynamics)
+dreamsac_symplectic:
+  agent:
+    dyn.typ: hamiltonian
+    dyn.hamiltonian.use_symplectic: True
+    dyn.hamiltonian.use_input_matrix: True
+    dyn.hamiltonian.integrator_method: leapfrog
+    dyn.hamiltonian.integrator_dt: 0.1
+    loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3}
+
+# DreamSAC with Equivariant Network (rotation invariant features)
+dreamsac_equivariant:
+  agent:
+    dyn.typ: hamiltonian
+    dyn.hamiltonian.use_equivariant: True
+    dyn.hamiltonian.use_e3nn: False  # Use simplified invariant features
+    dyn.hamiltonian.use_input_matrix: True
+    loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3}
+
+# DreamSAC with e3nn-jax (requires: pip install e3nn-jax)
+dreamsac_e3nn:
+  agent:
+    dyn.typ: hamiltonian
+    dyn.hamiltonian.use_equivariant: True
+    dyn.hamiltonian.use_e3nn: True
+    dyn.hamiltonian.equivariant_max_ell: 2
+    dyn.hamiltonian.use_input_matrix: True
+    loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3}
+
+# DreamSAC Full: Equivariant + Symplectic + Input Matrix (maximum physics constraints)
+dreamsac_full:
+  agent:
+    dyn.typ: hamiltonian
+    dyn.hamiltonian.use_equivariant: True
+    dyn.hamiltonian.use_e3nn: False  # Simplified (faster)
+    dyn.hamiltonian.use_symplectic: True
+    dyn.hamiltonian.use_input_matrix: True
+    dyn.hamiltonian.integrator_method: leapfrog
+    dyn.hamiltonian.integrator_dt: 0.1
+    loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3}
