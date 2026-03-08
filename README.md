@@ -1,4 +1,4 @@
-# DreamSAC
+# [CVPR 2026] DreamSAC: Learning Hamiltonian World Models via Symmetry Exploration
 
 **DreamSAC** is a model-based reinforcement learning agent that integrates structured world models with physics-inspired dynamics for robust visual control and zero-shot domain transfer.
 
