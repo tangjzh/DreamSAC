@@ -55,6 +55,11 @@ Evaluated on [DeepMind Control Suite](https://github.com/deepmind/dm_control) (v
 
 - `walker_walk`, `cheetah_run`, `hopper_hop`, `reacher_hard`, `humanoid_walk`
 
+## Acknowledgement
+
+Some parts of this project are adapted from [DreamerV3](https://github.com/danijar/dreamerv3) and [Slot Attention](https://github.com/evelinehong/slot-attention-pytorch). We would like to thank the authors for their work.
+
+
 ## Citation
 
 Coming soon ...
