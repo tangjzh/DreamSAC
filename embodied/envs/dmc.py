@@ -4,6 +4,9 @@ import os
 import elements
 import embodied
 import numpy as np
+
+# dm_control selects its renderer at import time.
+os.environ.setdefault('MUJOCO_GL', 'egl')
 from dm_control import manipulation
 from dm_control import suite
 from dm_control.locomotion.examples import basic_rodent_2020
@@ -21,8 +24,6 @@ class DMC(embodied.Env):
   def __init__(
       self, env, repeat=1, size=(64, 64), proprio=True, image=True, camera=-1,
       seed=0, gravity_scale=1.0, friction_scale=1.0):
-    if 'MUJOCO_GL' not in os.environ:
-      os.environ['MUJOCO_GL'] = 'egl'
     if isinstance(env, str):
       domain, task = env.split('_', 1)
       if camera == -1:
