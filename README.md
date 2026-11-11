@@ -86,38 +86,7 @@ python dreamsac/main.py \
   --run.from_checkpoint_verify True
 ```
 
-Each stage saves its full configuration as `config.yaml`. To run a saved configuration:
-
-```bash
-python tools/run_config.py path/to/config.yaml --logdir logdir/new-run
-```
-
-## Evaluation
-
-Evaluate a frozen policy over complete episodes using a separate evaluation seed:
-
-```bash
-python tools/evaluate.py \
-  --config logdir/cheetah_run/finetune/config.yaml \
-  --checkpoint logdir/cheetah_run/finetune/ckpt/CHECKPOINT_ID \
-  --episodes 10 --seed 10000 --output logdir/cheetah_run/evaluation.json
-```
-
-The output includes per-episode returns and lengths, mean and standard deviation,
-environment settings, dependency versions and a source hash. For before/after
-comparisons, use the same evaluation seed and number of episodes.
-
-## Tests
-
-```bash
-JAX_PLATFORMS=cpu python -m pytest -q tests/test_release.py
-
-MUJOCO_GL=egl python tools/validate_dmc.py \
-  --tasks cheetah_run quadruped_run --output logdir/validation
-```
-
-The DMC integration checks cover both tasks with plain and SAVi/viewpoint
-configurations, gradient updates, checkpoint transfer and fine-tuning.
+Each stage saves its full configuration as `config.yaml`.
 
 ## Acknowledgement
 
@@ -127,4 +96,12 @@ We would like to thank the authors for their work.
 
 ## Citation
 
-Coming soon ...
+```bibtex
+@inproceedings{tang2026dreamsac,
+  title={DreamSAC: Learning Hamiltonian World Models via Symmetry Exploration},
+  author={Tang, Jinzhou and Feng, Fan and Fu, Minghao and Lin, Wenjun and Yang, Jing and Huang, Biwei and Wang, Keze},
+  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  pages={15188--15198},
+  year={2026}
+}
+```
