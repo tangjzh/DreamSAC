@@ -112,7 +112,7 @@ class Agent(embodied.jax.Agent):
       self.p2e_net = intrinsic.Plan2ExploreNetwork(action_dim, **config.plan2explore, name='p2e')
     
     # Training step counter for annealing (used in hybrid intrinsic reward)
-    self.training_step = 0
+    self.training_step = nj.Variable(jnp.array, 0, i32, name='training_step')
 
     self.modules = [
         self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
@@ -222,7 +222,7 @@ class Agent(embodied.jax.Agent):
     metrics.update(mets)
     self.slowval.update()
     # Increment training step counter for intrinsic reward annealing
-    self.training_step += 1
+    self.training_step.write(self.training_step.read() + 1)
     outs = {}
     if self.config.replay_context:
       updates = elements.tree.flatdict(dict(
@@ -238,6 +238,7 @@ class Agent(embodied.jax.Agent):
 
   def loss(self, carry, obs, prevact, training):
     enc_carry, dyn_carry, dec_carry = carry
+    initial_enc_carry = enc_carry
     reset = obs['is_first']
     B, T = reset.shape
     losses = {}
@@ -266,9 +267,17 @@ class Agent(embodied.jax.Agent):
           
           # Create encoder function that takes images -> latent
           def encode_fn(imgs):
-            # This is a simplified version - in practice would need full encoder call
-            # For now, use the tokens as the latent representation
-            return tokens.reshape((B * T, -1))
+            augmented = dict(obs)
+            offset = 0
+            for key in sorted(imgkeys):
+              channels = obs[key].shape[-1]
+              values = imgs[..., offset:offset + channels]
+              augmented[key] = jnp.clip(values * 255, 0, 255).astype(
+                  jnp.uint8).reshape(obs[key].shape)
+              offset += channels
+            _, _, view_tokens = self.enc(
+                initial_enc_carry, augmented, reset, training)
+            return view_tokens.reshape((B * T, -1))
           
           # Compute L_vr using the flat images
           vr_loss, vr_metrics = viewpoint.compute_viewpoint_robustness_loss(
@@ -353,7 +362,7 @@ class Agent(embodied.jax.Agent):
     # Compute rewards (external or intrinsic)
     if self.config.use_intrinsic_reward:
       # Get current training step for annealing (used in hybrid reward)
-      training_step = jnp.array(self.training_step, dtype=jnp.float32)
+      training_step = f32(self.training_step.read())
       
       # Compute intrinsic reward based on configured type
       if self.config.intrinsic_reward_type == 'rnd' and self.rnd_net is not None:

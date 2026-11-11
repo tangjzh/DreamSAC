@@ -9,6 +9,9 @@ sys.path.insert(0, str(folder.parent))
 sys.path.insert(1, str(folder.parent.parent))
 __package__ = folder.name
 
+from .runtime import ensure_cuda_paths
+ensure_cuda_paths()
+
 import elements
 import embodied
 import numpy as np

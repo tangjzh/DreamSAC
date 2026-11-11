@@ -353,9 +353,20 @@ class Agent(embodied.Agent):
     return data
 
   @elements.timer.section('jaxagent_load')
-  def load(self, data, regex=None):
+  def load(self, data, regex=None, verify=False):
     params = data['params']
     assert params
+
+    if verify:
+      if not regex:
+        raise ValueError('Verified transfer requires an explicit parameter regex.')
+      expected = {k: v for k, v in self.params.items() if re.match(regex, k)}
+      missing = sorted(set(expected) - set(params))
+      if not expected or missing:
+        raise ValueError(f'Incomplete checkpoint transfer; missing: {missing}')
+      for key, value in expected.items():
+        if value.shape != params[key].shape:
+          raise ValueError(f'Checkpoint shape mismatch: {key}')
 
     with contextlib.ExitStack() as stack:
       stack.enter_context(self.train_lock)
@@ -393,6 +404,19 @@ class Agent(embodied.Agent):
           group = shard_fn(internal.device_put(group, self.train_mirrored))
           loaded.update(group)
         self.params = loaded
+
+      if verify:
+        import json
+        groups = {}
+        for key in expected:
+          if not np.array_equal(jax.device_get(self.params[key]), data['params'][key]):
+            raise ValueError(f'Checkpoint transfer value mismatch: {key}')
+          group = key.split('/')[0]
+          groups[group] = groups.get(group, 0) + 1
+        audit = dict(regex=regex, arrays=len(expected), groups=groups,
+                     all_arrays_exactly_equal=True)
+        (self.logdir / 'transfer.json').write(json.dumps(audit, indent=2) + '\n')
+        print('Verified checkpoint transfer:', audit)
 
       if self.jaxcfg.enable_policy:
         jax.tree.map(lambda x: x.delete(), self.policy_params)

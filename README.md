@@ -10,57 +10,121 @@ Learned world models excel at interpolative generalization but fail at extrapola
 
 ## Installation
 
+Use Python 3.10 on Linux with an NVIDIA CUDA 12 driver:
+
 ```bash
-pip install -r requirements.txt
-# Optional: for SE(3)-equivariant networks
-pip install e3nn-jax
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip check
 ```
 
-> Requires JAX with CUDA 12. See [JAX installation guide](https://github.com/google/jax#installation).
+`requirements-dmc.lock` pins the DMC dependencies and CUDA runtime packages.
+The entry point locates pip-installed CUDA libraries automatically. MuJoCo uses
+EGL by default. For OSMesa rendering, install the native OSMesa library and set
+`MUJOCO_GL=osmesa PYOPENGL_PLATFORM=osmesa`.
 
-## Usage
+## Two-Stage Training
 
-### Two-Stage Training (Pretrain → Finetune)
+Pretrain, then fine-tune with task rewards:
 
 ```bash
-bash run.sh
+CUDA_VISIBLE_DEVICES=0 TASK=dmc_cheetah_run bash run.sh
+CUDA_VISIBLE_DEVICES=1 TASK=dmc_quadruped_run bash run.sh
 ```
 
-### Custom Run
+The default configuration uses `dreamsac_full`, the simple encoder/decoder,
+1M pretraining steps and 500K fine-tuning steps. Set the output directory, budget
+and seed explicitly for an experiment:
 
 ```bash
-# Stage 1: Unsupervised pre-training
+CUDA_VISIBLE_DEVICES=0 TASK=dmc_cheetah_run SEED=0 \
+  PRETRAIN_STEPS=2000000 FINETUNE_STEPS=500000 \
+  RUN_ROOT=logdir/cheetah_run/seed-0 bash run.sh
+```
+
+Use the same `RUN_ROOT` and configuration to resume an interrupted run. Fine-tuning
+loads model, policy and value weights from the completed pretraining checkpoint,
+starts fresh optimizer and reward-normalization state, and records parameter
+verification in `finetune/transfer.json`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TASK` | `dmc_cheetah_run` | Environment task |
+| `SEED` | `0` | Training seed |
+| `PRETRAIN_STEPS` | `1000000` | Pretraining budget |
+| `FINETUNE_STEPS` | `500000` | Fine-tuning budget |
+| `RUN_ROOT` | Timestamped directory | Checkpoints, replay and logs |
+| `USE_SAVI` | `False` | SAVi encoder and decoder |
+| `USE_VIEWPOINT` | `False` | Viewpoint loss during pretraining |
+| `REWARD_FREE` | `False` | Disable the task-reward replay-value loss during pretraining |
+| `PYTHON` | `python` | Python executable |
+
+Enable SAVi and viewpoint loss:
+
+```bash
+TASK=dmc_cheetah_run USE_SAVI=True USE_VIEWPOINT=True bash run.sh
+```
+
+On shared GPUs, `XLA_PYTHON_CLIENT_ALLOCATOR=platform` avoids reserving a large
+GPU memory pool. Use a new output directory when changing model configurations.
+
+### Run Stages Separately
+
+```bash
 python dreamsac/main.py \
-    --configs dreamsac_e3nn pretrain dmc_vision \
-    --logdir logdir/pretrain \
-    --run.steps 1000000
+  --configs dreamsac_full pretrain dmc_vision \
+  --task dmc_cheetah_run --seed 0 --logger.outputs jsonl \
+  --logdir logdir/cheetah_run/pretrain --run.steps 1000000
 
-# Stage 2: Fine-tuning
 python dreamsac/main.py \
-    --configs dreamsac_e3nn finetune dmc_vision \
-    --logdir logdir/finetune \
-    --run.from_checkpoint logdir/pretrain/ckpt/<step> \
-    --run.steps 500000
+  --configs dreamsac_full finetune dmc_vision \
+  --task dmc_cheetah_run --seed 0 --logger.outputs jsonl \
+  --logdir logdir/cheetah_run/finetune --run.steps 500000 \
+  --run.from_checkpoint logdir/cheetah_run/pretrain/ckpt/CHECKPOINT_ID \
+  --run.from_checkpoint_regex '^(enc|dyn|dec|rew|con|pol|val|slowval)/' \
+  --run.from_checkpoint_verify True
 ```
 
-### Domain Randomization
+Each stage saves its full configuration as `config.yaml`. To run a saved configuration:
 
 ```bash
-bash run_transfer.sh
+python tools/run_config.py path/to/config.yaml --logdir logdir/new-run
 ```
 
-## Environments
+## Evaluation
 
-Evaluated on [DeepMind Control Suite](https://github.com/deepmind/dm_control) (visual observations):
+Evaluate a frozen policy over complete episodes using a separate evaluation seed:
 
-- `walker_walk`, `cheetah_run`, `hopper_hop`, `reacher_hard`, `humanoid_walk`
+```bash
+python tools/evaluate.py \
+  --config logdir/cheetah_run/finetune/config.yaml \
+  --checkpoint logdir/cheetah_run/finetune/ckpt/CHECKPOINT_ID \
+  --episodes 10 --seed 10000 --output logdir/cheetah_run/evaluation.json
+```
+
+The output includes per-episode returns and lengths, mean and standard deviation,
+environment settings, dependency versions and a source hash. For before/after
+comparisons, use the same evaluation seed and number of episodes.
+
+## Tests
+
+```bash
+JAX_PLATFORMS=cpu python -m pytest -q tests/test_release.py
+
+MUJOCO_GL=egl python tools/validate_dmc.py \
+  --tasks cheetah_run quadruped_run --output logdir/validation
+```
+
+The DMC integration checks cover both tasks with plain and SAVi/viewpoint
+configurations, gradient updates, checkpoint transfer and fine-tuning.
 
 ## Acknowledgement
 
-Some parts of this project are adapted from [DreamerV3](https://github.com/danijar/dreamerv3) and [Slot Attention](https://github.com/evelinehong/slot-attention-pytorch). We would like to thank the authors for their work.
-
+Some parts of this project are adapted from [DreamerV3](https://github.com/danijar/dreamerv3)
+and [Slot Attention](https://github.com/evelinehong/slot-attention-pytorch).
+We would like to thank the authors for their work.
 
 ## Citation
 
 Coming soon ...
-

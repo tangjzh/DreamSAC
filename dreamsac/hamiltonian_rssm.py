@@ -259,6 +259,8 @@ class HamiltonianRSSM(nj.Module):
     # 1. Convert input one-hot states to continuous values.
     q_cont = nn.cast(self._to_continuous(q_current))
     p_cont = nn.cast(self._to_continuous(p_current))
+    # Initialize Ninjax parameters outside the integrator's nested jax.grad.
+    self.compute_hamiltonian({'q': q_cont, 'p': p_cont}, action)
 
     # Select integrator.
     integrators = {

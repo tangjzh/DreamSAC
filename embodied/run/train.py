@@ -74,6 +74,13 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
       with elements.timer.section('stream_next'):
         batch = next(stream_train)
       carry_train[0], outs, mets = agent.train(carry_train[0], batch)
+      for key in ('opt/loss', 'opt/grad_norm'):
+        if key in mets and not np.isfinite(mets[key]).all():
+          details = {name: mets.get(name) for name in (
+              'opt/loss', 'opt/grad_norm', 'opt/raw_grads_finite',
+              'opt/raw_grad_max')}
+          raise FloatingPointError(
+              f'Nonfinite training metric {key} at step {int(step)}: {details}')
       train_fps.step(batch_steps)
       if 'replay' in outs:
         replay.update(outs['replay'])
@@ -85,8 +92,10 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   cp.agent = agent
   cp.replay = replay
   if args.from_checkpoint:
-    elements.checkpoint.load(args.from_checkpoint, dict(
-        agent=bind(agent.load, regex=args.from_checkpoint_regex)))
+    load = bind(agent.load, regex=args.from_checkpoint_regex)
+    if args.from_checkpoint_verify:
+      load = bind(load, verify=True)
+    elements.checkpoint.load(args.from_checkpoint, dict(agent=load))
   cp.load_or_save()
 
   print('Start training loop')
@@ -116,4 +125,9 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
     if should_save(step):
       cp.save()
 
+  # A short run can end before the periodic checkpoint fires.
+  cp.save()
+  logger.add(train_agg.result())
+  logger.write()
+  driver.close()
   logger.close()

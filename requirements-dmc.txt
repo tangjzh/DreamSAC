@@ -1,0 +1,18 @@
+# Python 3.10/3.11. Minimal DMC dependencies, not Atari/Minecraft.
+jax[cuda12]==0.4.33
+numpy==1.26.4
+chex==0.1.87
+optax==0.2.3
+ninjax==3.5.1
+elements==3.19.1
+portal==3.5.0
+ruamel.yaml==0.18.6
+dm-control==1.0.28
+mujoco==3.3.1
+einops==0.8.2
+cloudpickle==3.1.2
+psutil==7.2.2
+imageio==2.37.3
+imageio-ffmpeg==0.6.0
+pytest>=8,<10
+e3nn-jax==0.20.8

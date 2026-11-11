@@ -29,6 +29,9 @@ class DMCRandomized(dmc.DMC):
       physics_params=None,
       param_set_id=None,
       all_param_sets=None,
+      seed=0,
+      gravity_scale=1.0,
+      friction_scale=1.0,
   ):
     """
     Args:
@@ -60,20 +63,24 @@ class DMCRandomized(dmc.DMC):
         domain = 'ball_in_cup'
       
       # Create environment with custom physics
-      env_obj = suite.load(domain, task)
+      env_obj = suite.load(domain, task, task_kwargs={'random': seed})
+      if camera == -1:
+        camera = self.DEFAULT_CAMERAS.get(domain, 0)
       
       # Apply physics randomization
       self._apply_physics_randomization(env_obj)
       
       super().__init__(
           env_obj, repeat=repeat, size=size,
-          proprio=proprio, image=image, camera=camera)
+          proprio=proprio, image=image, camera=camera,
+          gravity_scale=gravity_scale, friction_scale=friction_scale)
     else:
       # If env is already an object
       self._apply_physics_randomization(env)
       super().__init__(
           env, repeat=repeat, size=size,
-          proprio=proprio, image=image, camera=camera)
+          proprio=proprio, image=image, camera=camera,
+          gravity_scale=gravity_scale, friction_scale=friction_scale)
 
   def _apply_physics_randomization(self, env):
     """Apply physics parameter randomization to the environment."""

@@ -34,7 +34,7 @@ defaults:
     atari100k: {size: [64, 64], repeat: 4, sticky: False, gray: False, actions: needed, lives: unused, noops: 30, autostart: False, resize: pillow, clip_reward: False}
     dmlab: {size: [64, 64], repeat: 4, episodic: True, use_seed: True}
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
-    dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1, use_randomized: False, param_file: '', use_train_set: True}
+    dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1, use_seed: True, gravity_scale: 1.0, friction_scale: 1.0, use_randomized: False, param_file: '', use_train_set: True}
     loconav: {size: [64, 64], repeat: 1, camera: -1}
 
   replay:
@@ -59,6 +59,7 @@ defaults:
     report_batches: 1
     from_checkpoint: ''
     from_checkpoint_regex: '.*'
+    from_checkpoint_verify: False
     episode_timeout: 180
     actor_addr: 'localhost:{auto}'
     replay_addr: 'localhost:{auto}'
@@ -126,11 +127,11 @@ defaults:
     enc:
       typ: simple
       simple: {depth: 64, mults: [2, 3, 4, 4], layers: 3, units: 1024, act: silu, norm: rms, winit: trunc_normal_in, symlog: True, outer: False, kernel: 5, strided: False}
-      savi: {depth: 32, mults: [2, 3, 4, 4], kernel: 5, num_slots: 7, slot_dim: 128, feature_dim: 128, num_iterations: 3, num_initial_iterations: 5, act: silu, norm: rms, winit: trunc_normal_in}
+      savi: {depth: 64, mults: [2, 3, 4, 4], kernel: 5, num_slots: 7, slot_dim: 128, feature_dim: 128, num_iterations: 3, num_initial_iterations: 5, act: silu, norm: rms, winit: trunc_normal_in}
     dec:
       typ: simple
       simple: {depth: 64, mults: [2, 3, 4, 4], layers: 3, units: 1024, act: silu, norm: rms, outscale: 1.0, winit: trunc_normal_in, outer: False, kernel: 5, bspace: 8, strided: False}
-      savi: {depth: 32, mults: [2, 3, 4, 4], kernel: 5, num_slots: 7, slot_dim: 128, act: silu, norm: rms, outscale: 1.0, winit: trunc_normal_in}
+      savi: {depth: 64, mults: [2, 3, 4, 4], kernel: 5, num_slots: 7, slot_dim: 128, act: silu, norm: rms, outscale: 1.0, winit: trunc_normal_in}
     rewhead: {layers: 1, units: 1024, act: silu, norm: rms, output: symexp_twohot, outscale: 0.0, winit: trunc_normal_in, bins: 255}
     conhead: {layers: 1, units: 1024, act: silu, norm: rms, output: binary, outscale: 1.0, winit: trunc_normal_in}
     policy: {layers: 3, units: 1024, act: silu, norm: rms, minstd: 0.1, maxstd: 1.0, outscale: 0.01, unimix: 0.01, winit: trunc_normal_in}
@@ -269,7 +270,7 @@ pretrain:
     anneal_start: 10000
     anneal_steps: 100000
     w_final: 1.0
-    loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 0.0, value: 0.0, repval: 0.0}
+    loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3}
 
 # DreamSAC: Finetune on downstream task with external reward (default: zero-shot)
 finetune:
@@ -350,3 +351,7 @@ dreamsac_full:
     dyn.hamiltonian.integrator_method: leapfrog
     dyn.hamiltonian.integrator_dt: 0.1
     loss_scales: {rec: 1.0, rew: 0.0, con: 1.0, dyn: 1.0, rep: 0.1, policy: 1.0, value: 1.0, repval: 0.3}
+
+# Apply after pretrain to disable the task-reward replay-value objective.
+pretrain_reward_free:
+  agent.loss_scales.repval: 0.0

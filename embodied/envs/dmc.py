@@ -19,7 +19,8 @@ class DMC(embodied.Env):
   )
 
   def __init__(
-      self, env, repeat=1, size=(64, 64), proprio=True, image=True, camera=-1):
+      self, env, repeat=1, size=(64, 64), proprio=True, image=True, camera=-1,
+      seed=0, gravity_scale=1.0, friction_scale=1.0):
     if 'MUJOCO_GL' not in os.environ:
       os.environ['MUJOCO_GL'] = 'egl'
     if isinstance(env, str):
@@ -37,7 +38,11 @@ class DMC(embodied.Env):
         # camera 5: eyes
         env = getattr(basic_rodent_2020, task)()
       else:
-        env = suite.load(domain, task)
+        env = suite.load(domain, task, task_kwargs={'random': seed})
+    if gravity_scale <= 0 or friction_scale <= 0:
+      raise ValueError('Physics scales must be positive.')
+    env.physics.model.opt.gravity[:] *= gravity_scale
+    env.physics.model.geom_friction[:] *= friction_scale
     self._dmenv = env
     self._env = from_dm.FromDM(self._dmenv)
     self._env = embodied.wrappers.ActionRepeat(self._env, repeat)
@@ -45,6 +50,9 @@ class DMC(embodied.Env):
     self._proprio = proprio
     self._image = image
     self._camera = camera
+
+  def close(self):
+    self._dmenv.close()
 
   @functools.cached_property
   def obs_space(self):

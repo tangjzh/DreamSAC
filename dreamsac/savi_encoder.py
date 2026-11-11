@@ -141,7 +141,8 @@ class SlotAttention(nj.Module):
       # Conditionally apply update based on should_run
       # This allows us to use different iteration counts while staying JIT-friendly
       # should_run is a scalar boolean, so we expand it to match slots shape
-      slots = jnp.where(should_run, slots_updated, slots_before_iter)
+      slots = jnp.where(jnp.asarray(should_run)[..., None, None],
+                        slots_updated, slots_before_iter)
     
     return slots
   
@@ -365,7 +366,9 @@ class SAViEncoder(nj.Module):
     
   @property
   def entry_space(self):
-    return {}
+    import elements
+    return {'prev_slots': elements.Space(
+        np.float32, (self.num_slots, self.slot_dim))}
   
   def initial(self, batch_size):
     # Store previous slots for temporal consistency
@@ -374,14 +377,7 @@ class SAViEncoder(nj.Module):
     return {'prev_slots': nn.cast(zeros)}
   
   def truncate(self, entries, carry=None):
-    # Return a dict with same structure as initial() to match tree structure
-    # Infer batch size from carry if available, otherwise use 1
-    if carry and 'prev_slots' in carry:
-      batch_size = carry['prev_slots'].shape[0]
-    else:
-      batch_size = 1
-    zeros = jnp.zeros((batch_size, self.num_slots, self.slot_dim), f32)
-    return {'prev_slots': nn.cast(zeros)}
+    return {'prev_slots': nn.cast(entries['prev_slots'][:, -1])}
   
   def __call__(self, carry, obs, reset, training, single=False):
     """
@@ -420,7 +416,6 @@ class SAViEncoder(nj.Module):
     batch_time, h, w, c = x.shape
     
     # Add positional encoding
-    x = x.transpose((0, 2, 3, 1))  # [B*T, H', W', C']
     x = self.sub('pos_embed', ImagePositionalEmbedding, (h, w), 
                  feature_dim=c, **self.kw)(x)
     
@@ -429,63 +424,29 @@ class SAViEncoder(nj.Module):
     features = self.sub('feature_mlp', nn.Linear, self.feature_dim, **self.kw)(features)
     features = nn.act(self.act)(features)
     
-    # Handle previous slots and reset
-    prev_slots = carry.get('prev_slots', None)
-    
-    # Initialize slots (always create initializer for JIT compatibility)
-    initializer = self.sub('slot_init', SlotInitializer, 
-                         num_slots=self.num_slots, 
-                         slot_dim=self.slot_dim, **self.kw)
-    init_slots = initializer(batch_time)
-    
-    # Check if we should use previous slots (when not resetting and prev_slots exists)
-    # Use jnp.where to select between init_slots and prev_slots in a JAX-friendly way
-    # Also determine if this is the first frame (for using num_initial_iterations)
-    if prev_slots is None:
-      slots = init_slots
-      is_first = True  # No previous slots = first frame
-    else:
-      # Expand prev_slots to match batch_time dimension
-      # prev_slots has shape [B, num_slots, slot_dim], need [B*T, num_slots, slot_dim]
-      B = prev_slots.shape[0]
-      T = batch_time // B if B > 0 else batch_time
-      # Repeat each batch's slots T times along batch dimension
-      prev_slots_expanded = jnp.repeat(prev_slots, T, axis=0)
-      
-      # Use init_slots when any episode resets, else use prev_slots
-      # reset shape: [B*T] or [B, T], flatten to check any reset in batch
-      should_reset = jnp.any(reset.reshape(-1))
-      slots = jnp.where(should_reset, init_slots, prev_slots_expanded)
-      is_first = should_reset  # First frame if resetting
-    
-    # Ensure slots have correct dtype (e.g., bfloat16)
-    slots = nn.cast(slots)
-    
-    # Apply slot attention
+    initializer = self.sub('slot_init', SlotInitializer,
+                           num_slots=self.num_slots,
+                           slot_dim=self.slot_dim, **self.kw)
     slot_attention = self.sub('slot_attn', SlotAttention,
-                             feature_dim=self.feature_dim,
-                             num_slots=self.num_slots,
-                             slot_dim=self.slot_dim,
-                             num_iterations=self.num_iterations,
-                             num_initial_iterations=self.num_initial_iterations,
-                             **self.kw)
-    slots = slot_attention(features, slots, is_first=is_first)
-    
-    # Flatten slots to tokens: [B*T, num_slots * slot_dim]
-    tokens = slots.reshape((batch_time, self.num_slots * self.slot_dim))
-    
-    # Reshape back to original batch/time structure
-    tokens = tokens.reshape((*bshape, self.num_slots * self.slot_dim))
-    slots = slots.reshape((*bshape, self.num_slots, self.slot_dim))
-    
-    # Update carry
-    if single:
-      new_carry = {'prev_slots': slots}
-    else:
-      # Take last timestep as prev_slots
-      new_carry = {'prev_slots': slots[:, -1]}
-    
-    entries = {}
-    
-    return new_carry, entries, tokens
+                              feature_dim=self.feature_dim,
+                              num_slots=self.num_slots,
+                              slot_dim=self.slot_dim,
+                              num_iterations=self.num_iterations,
+                              num_initial_iterations=self.num_initial_iterations,
+                              **self.kw)
+    features = features.reshape((*bshape, h * w, self.feature_dim))
 
+    def step(previous, inputs):
+      feature, first = inputs
+      initial = initializer(feature.shape[0])
+      slots = jnp.where(first[:, None, None], initial, previous)
+      slots = slot_attention(feature, nn.cast(slots), is_first=first)
+      return slots, slots
+
+    if single:
+      last, slots = step(nn.cast(carry['prev_slots']), (features, reset))
+    else:
+      last, slots = nj.scan(step, nn.cast(carry['prev_slots']),
+                            (features, reset), axis=1)
+    tokens = slots.reshape((*bshape, self.num_slots * self.slot_dim))
+    return {'prev_slots': last}, {'prev_slots': slots}, tokens

@@ -41,6 +41,12 @@ class EquivariantHamiltonianNet(nj.Module):
         # Filter out equivariant-specific parameters that shouldn't go to base layers
         filtered_kw = {k: v for k, v in kw.items() if k not in ['max_ell', 'use_e3nn', 'use_equivariant']}
         self.kw = filtered_kw
+        if self.use_e3nn and not E3NN_AVAILABLE:
+            raise ImportError("e3nn-jax is missing. Use the dreamsac_full profile or install e3nn-jax.")
+        if self.use_e3nn and not hasattr(e3nn, 'Linear'):
+            raise NotImplementedError(
+                "dreamsac_e3nn requires an e3nn.Linear API unavailable in this installation. "
+                "Use the dreamsac_full profile.")
         if self.use_e3nn and E3NN_AVAILABLE:
             # Define the Irreducible Representations (Irreps) for the network
             
@@ -318,8 +324,8 @@ class SimplifiedEquivariantHamiltonian(nj.Module):
         features = []
         
         # 1. Norms (kinetic and potential energy proxies)
-        q_norm = jnp.linalg.norm(q, axis=-1, keepdims=True)  # [B, 1]
-        p_norm = jnp.linalg.norm(p, axis=-1, keepdims=True)  # [B, 1]
+        q_norm = jnp.sqrt(jnp.sum(q ** 2, axis=-1, keepdims=True) + 1e-6)  # [B, 1]
+        p_norm = jnp.sqrt(jnp.sum(p ** 2, axis=-1, keepdims=True) + 1e-6)  # [B, 1]
         features.extend([q_norm, p_norm])
         
         # 2. Squared norms (quadratic terms)

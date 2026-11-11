@@ -91,7 +91,9 @@ def setup(
         '--xla_enable_async_all_gather=true',
     ]
   if xlaflags:
-    os.environ['XLA_FLAGS'] = ' '.join(xlaflags)
+    # Preserve explicit CUDA toolkit/library settings from the launcher.
+    os.environ['XLA_FLAGS'] = (os.environ.get('XLA_FLAGS', '') + ' ' +
+                              ' '.join(xlaflags)).strip()
 
   if num_processes > 1 and platform != 'tpu':
     # Note that the process_id is unrelated to the jax.process_index() that JAX

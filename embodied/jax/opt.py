@@ -13,6 +13,41 @@ i32 = jnp.int32
 sg = jax.lax.stop_gradient
 
 
+def stable_global_norm(tree):
+  """L2 norm without squaring large, finite float32 values directly."""
+  leaves = [f32(x) for x in jax.tree.leaves(tree)]
+  if not leaves:
+    return jnp.array(0, f32)
+  largest = jnp.stack([jnp.max(jnp.abs(x), initial=0) for x in leaves]).max()
+  scale = jnp.where(largest > 0, largest, 1.0)
+  sumsq = jnp.stack([jnp.square(x / scale).sum() for x in leaves]).sum()
+  return scale * jnp.sqrt(sumsq)
+
+
+class OptimizerState(nj.Module):
+  """Preserve PyTree leaf order with Ninjax 3.5.1.
+
+  nj.Tree sanitizes dictionary paths (including underscores) before sorting;
+  that can reorder optimizer moments relative to their parameter leaves.
+  """
+  def __init__(self, make, params):
+    self.make = lambda: make(params)
+
+  def read(self):
+    if not self.values:
+      leaves, self.treedef = jax.tree.flatten(self.make())
+      for i, leaf in enumerate(leaves):
+        self.value(f'leaf{i:06d}', leaf)
+    return jax.tree.unflatten(self.treedef,
+        [self.values[k] for k in sorted(self.values)])
+
+  def write(self, tree):
+    leaves, treedef = jax.tree.flatten(tree)
+    assert treedef == self.treedef
+    for i, leaf in enumerate(leaves):
+      super().write(f'leaf{i:06d}', leaf)
+
+
 class Optimizer(nj.Module):
 
   summary_depth: int = 2
@@ -57,11 +92,11 @@ class Optimizer(nj.Module):
       invscale = 1 / self.grad_scale.read()
       grads = jax.tree.map(lambda x: x * invscale, grads)
 
-    state = self.sub('state', nj.Tree, self.opt.init, params)
+    state = self.sub('state', OptimizerState, self.opt.init, params)
     updates, new_state = self.opt.update(grads, state.read(), params)
     nj.context().update(optax.apply_updates(params, updates))
     state.write(new_state)
-    grad_norm = optax.global_norm(grads)
+    grad_norm = stable_global_norm(grads)
     if self.scaling:
       self._update_scale(grads, jnp.isfinite(grad_norm))
       grad_norm = jnp.where(jnp.isfinite(grad_norm), grad_norm, jnp.nan)
@@ -73,7 +108,11 @@ class Optimizer(nj.Module):
     metrics['loss'] = loss.mean()
     metrics['updates'] = self.step.read()
     metrics['grad_norm'] = grad_norm
-    metrics['grad_rms'] = nets.rms(grads)
+    metrics['grad_rms'] = grad_norm / jnp.sqrt(f32(sum(counts.values())))
+    metrics['raw_grads_finite'] = f32(jnp.stack([
+        jnp.isfinite(x).all() for x in jax.tree.leaves(grads)]).all())
+    metrics['raw_grad_max'] = jnp.stack([
+        jnp.max(jnp.abs(x), initial=0) for x in jax.tree.leaves(grads)]).max()
     metrics['update_rms'] = nets.rms(updates)
     metrics['param_rms'] = nets.rms([x.values for x in self.modules])
     metrics['param_count'] = jnp.array(list(counts.values()), f32).sum()
@@ -113,10 +152,11 @@ def clip_by_agc(clip=0.3, pmin=1e-3):
 
   def update_fn(updates, state, params=None):
     def fn(param, update):
-      unorm = jnp.linalg.norm(update.flatten(), 2)
-      pnorm = jnp.linalg.norm(param.flatten(), 2)
+      unorm = stable_global_norm(update)
+      pnorm = stable_global_norm(param)
       upper = clip * jnp.maximum(pmin, pnorm)
-      return update * (1 / jnp.maximum(1.0, unorm / upper))
+      unit = update / jnp.where(unorm > 0, unorm, 1.0)
+      return jnp.where(unorm > upper, unit * upper, update)
     updates = jax.tree.map(fn, params, updates) if clip else updates
     return updates, ()
 
